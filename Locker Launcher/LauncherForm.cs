@@ -35,12 +35,6 @@ namespace Locker_Launcher
                     ErrorInfo.Text = "";
             };
 
-            btnOK.Click += BtnOk_Click;
-            btnCancel.Click += (s, ev) => Application.Exit();
-
-            this.AcceptButton = btnOK;
-            this.CancelButton = btnCancel;
-
             // Если путь не найден сразу, блокирует кнопку "ОК", чтобы предотвратить запуск без исполнительного файла
             if (!TryFindProgLocExe())
             {
@@ -72,7 +66,7 @@ namespace Locker_Launcher
                     // Игнорирует ошибки парсинга, чтобы перейти к поиску в стандартных местах
                 }
             }
-
+            
             //  Проверяет в папке рядом с этим файлом, чтобы найти его, если они лежат вместе
             string localPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Program Locker.exe");
             if (File.Exists(localPath))
@@ -141,10 +135,15 @@ namespace Locker_Launcher
 
                 if (exitCode != 0)
                 {
-                    // Пароль верный - показывает ошибку и даёт повторить
+                    // Пароль неверный — показывает ошибку и даёт повторить
                     ErrorInfo.Text = "Неверный пароль";
-                    Passwd.Focus();
-                    Passwd.SelectAll();
+
+                    // Отложенный вызов для корректной работы при клике мышкой
+                    this.BeginInvoke(new Action(() =>
+                    {
+                        Passwd.Focus();
+                        Passwd.SelectAll();
+                    }));
                     return;
                 }
 
@@ -169,6 +168,12 @@ namespace Locker_Launcher
                 this.Enabled = true;
                 this.Cursor = Cursors.Default;
             }
+        }
+
+        // BtnCancel_Click закрывает приложение
+        private void BtnCancel_Click(object sender, EventArgs e)
+        {
+            Application.Exit();
         }
     }
 }

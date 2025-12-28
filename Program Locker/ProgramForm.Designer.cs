@@ -46,6 +46,7 @@
             this.colHidden = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
             this.Version = new System.Windows.Forms.Label();
             this.Author = new System.Windows.Forms.LinkLabel();
+            this.btnRun = new System.Windows.Forms.Button();
             this.SuspendLayout();
             // 
             // lblPass
@@ -86,9 +87,9 @@
             // 
             // btnLock
             // 
-            this.btnLock.Location = new System.Drawing.Point(170, 300);
+            this.btnLock.Location = new System.Drawing.Point(254, 300);
             this.btnLock.Name = "btnLock";
-            this.btnLock.Size = new System.Drawing.Size(140, 23);
+            this.btnLock.Size = new System.Drawing.Size(115, 23);
             this.btnLock.TabIndex = 5;
             this.btnLock.Text = "Заблокировать";
             this.btnLock.UseVisualStyleBackColor = true;
@@ -98,7 +99,7 @@
             // 
             this.btnAddFile.Location = new System.Drawing.Point(12, 300);
             this.btnAddFile.Name = "btnAddFile";
-            this.btnAddFile.Size = new System.Drawing.Size(150, 23);
+            this.btnAddFile.Size = new System.Drawing.Size(115, 23);
             this.btnAddFile.TabIndex = 4;
             this.btnAddFile.Text = "Добавить файлы...";
             this.btnAddFile.UseVisualStyleBackColor = true;
@@ -106,9 +107,9 @@
             // 
             // btnUnlock
             // 
-            this.btnUnlock.Location = new System.Drawing.Point(318, 300);
+            this.btnUnlock.Location = new System.Drawing.Point(375, 300);
             this.btnUnlock.Name = "btnUnlock";
-            this.btnUnlock.Size = new System.Drawing.Size(140, 23);
+            this.btnUnlock.Size = new System.Drawing.Size(115, 23);
             this.btnUnlock.TabIndex = 6;
             this.btnUnlock.Text = "Разблокировать";
             this.btnUnlock.UseVisualStyleBackColor = true;
@@ -116,9 +117,9 @@
             // 
             // btnRemoveEntry
             // 
-            this.btnRemoveEntry.Location = new System.Drawing.Point(466, 300);
+            this.btnRemoveEntry.Location = new System.Drawing.Point(496, 300);
             this.btnRemoveEntry.Name = "btnRemoveEntry";
-            this.btnRemoveEntry.Size = new System.Drawing.Size(130, 23);
+            this.btnRemoveEntry.Size = new System.Drawing.Size(115, 23);
             this.btnRemoveEntry.TabIndex = 7;
             this.btnRemoveEntry.Text = "Удалить запись";
             this.btnRemoveEntry.UseVisualStyleBackColor = true;
@@ -126,9 +127,9 @@
             // 
             // btnRefresh
             // 
-            this.btnRefresh.Location = new System.Drawing.Point(604, 300);
+            this.btnRefresh.Location = new System.Drawing.Point(617, 300);
             this.btnRefresh.Name = "btnRefresh";
-            this.btnRefresh.Size = new System.Drawing.Size(128, 23);
+            this.btnRefresh.Size = new System.Drawing.Size(115, 23);
             this.btnRefresh.TabIndex = 8;
             this.btnRefresh.Text = "Обновить список";
             this.btnRefresh.UseVisualStyleBackColor = true;
@@ -193,7 +194,7 @@
             this.Version.Name = "Version";
             this.Version.Size = new System.Drawing.Size(57, 12);
             this.Version.TabIndex = 0;
-            this.Version.Text = "ver 27.12.25";
+            this.Version.Text = "ver 28.12.25";
             // 
             // Author
             // 
@@ -207,11 +208,22 @@
             this.Author.Text = "Автор Otto";
             this.Author.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.Author_LinkClicked);
             // 
+            // btnRun
+            // 
+            this.btnRun.Location = new System.Drawing.Point(133, 300);
+            this.btnRun.Name = "btnRun";
+            this.btnRun.Size = new System.Drawing.Size(115, 23);
+            this.btnRun.TabIndex = 11;
+            this.btnRun.Text = "Запуск";
+            this.btnRun.UseVisualStyleBackColor = true;
+            this.btnRun.Click += new System.EventHandler(this.BtnRun_Click);
+            // 
             // ProgramForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(743, 460);
+            this.Controls.Add(this.btnRun);
             this.Controls.Add(this.Author);
             this.Controls.Add(this.Version);
             this.Controls.Add(this.lvFiles);
@@ -257,6 +269,7 @@
         private System.Windows.Forms.ColumnHeader colHidden;
         private System.Windows.Forms.Label Version;
         private System.Windows.Forms.LinkLabel Author;
+        private System.Windows.Forms.Button btnRun;
     }
 }
 

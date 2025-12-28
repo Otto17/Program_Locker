@@ -23,6 +23,11 @@ namespace Program_Locker
 
         ConfigStore store;  // Хранит загруженные настройки приложения
 
+        // Список активных задач мониторинга и флаг принудительного закрытия
+        private readonly List<System.Threading.Tasks.Task> activeMonitorTasks = [];
+        private readonly object monitorTasksLock = new();
+        private bool forceClose = false;
+
         // ProgramForm инициализирует компоненты, загружает настройки и строит интерфейс
         public ProgramForm()
         {
@@ -97,7 +102,64 @@ namespace Program_Locker
                 string exeName = Path.GetFileNameWithoutExtension(visiblePath);
                 System.Threading.Thread.Sleep(1000); // Даём время процессу запуститься и инициировать блокировку файла
 
+                // Сохраняет информацию о файле ДО запуска, чтобы обнаружить возможные обновления
+                DateTime originalModified = File.GetLastWriteTimeUtc(visiblePath);
+                long originalSize = new FileInfo(visiblePath).Length;
+
+                // Запускает мониторинг обновлений Google Chrome в параллельном потоке
+                bool chromeUpdateDetected = false;
+                var chromeMonitorTask = System.Threading.Tasks.Task.Run(() =>
+                {
+                    chromeUpdateDetected = MonitorChromeUpdate(visiblePath, exeName);
+                });
+
                 WaitForAllProcessInstances(visiblePath, exeName);
+
+                // Ждёт завершения мониторинга Google Chrome
+                chromeMonitorTask.Wait(5000); // Максимум 5 секунд
+
+                // Проверяет результат мониторинга Chrome
+                if (chromeUpdateDetected)
+                {
+                    // Обнаружено обновление Chrome — снимает защиту
+                    entries.Remove(entry);
+                    store.EncryptAndStoreEntries(entries, password);
+                    SaveStore();
+
+                    ShowTopMostMessageBox(
+                        "Обнаружено обновление Google Chrome.\n\n" +
+                        "Защита снята и НЕ будет восстановлена автоматически.\n" +
+                        "После завершения обновления заново добавьте Chrome в Program Locker.",
+                        "Обновление Chrome", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                // Период стабилизации — ждёт и проверяет, не перезапустился ли процесс (обновление)
+                if (!WaitForStableState(visiblePath, exeName, originalModified, originalSize, out bool fileChanged))
+                {
+                    // Таймаут — процесс всё ещё работает
+                    MessageBox.Show(
+                        "Программа всё ещё работает или обновляется.\n" +
+                        "Защита не восстановлена.\n\n" +
+                        "Закройте программу и заблокируйте её вручную через Program Locker.",
+                        "Предупреждение", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Если файл не существует — ничего не делает
+                if (!File.Exists(visiblePath))
+                {
+                    MessageBox.Show(
+                        "Файл не найден после закрытия программы.\n" +
+                        "Возможно, программа была удалена или перемещена.\n\n" +
+                        "Запись удалена из защиты.",
+                        "Файл не найден", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+                    entries.Remove(entry);
+                    store.EncryptAndStoreEntries(entries, password);
+                    SaveStore();
+                    return;
+                }
 
                 // После завершения всех копий — пытается восстановить защиту
                 // Ждёт пока файл освободится и применяет защиту заново
@@ -126,15 +188,76 @@ namespace Program_Locker
                     return;
                 }
 
-                // Возвращает оригинал обратно в hiddenPath
-                File.Move(visiblePath, hiddenPath);
+                // Пытается восстановить защиту с проверкой и повторами
+                int maxRetries = 5;
+                for (int retry = 0; retry < maxRetries; retry++)
+                {
+                    try
+                    {
+                        // Возвращает оригинал обратно в hiddenPath
+                        if (File.Exists(hiddenPath))
+                            File.Delete(hiddenPath);
+                        File.Move(visiblePath, hiddenPath);
 
-                // Копирует лаунчер на место видимого файла
-                string launcherPath = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "Locker Launcher.exe");
-                File.Copy(launcherPath, visiblePath, true);
-                
-                // Заменяет иконку лаунчера на иконку оригинальной программы
-                IconReplacer.ReplaceIcon(hiddenPath, visiblePath);
+                        // Копирует лаунчер на место видимого файла
+                        string launcherPath = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "Locker Launcher.exe");
+                        File.Copy(launcherPath, visiblePath, true);
+
+                        // Заменяет иконку лаунчера на иконку оригинальной программы
+                        IconReplacer.ReplaceIcon(hiddenPath, visiblePath);
+
+                        // Финальная проверка — убеждается что лаунчер на месте и не был перезаписан
+                        System.Threading.Thread.Sleep(500);
+
+                        if (IsFileLauncher(visiblePath))
+                        {
+                            // Успех — лаунчер на месте
+                            break;
+                        }
+
+                        // Лаунчер был перезаписан — вероятно продолжается обновление
+                        if (retry < maxRetries - 1)
+                        {
+                            // Восстанавливает состояние для повторной попытки
+                            if (File.Exists(visiblePath) && !IsFileLauncher(visiblePath))
+                            {
+                                // Новый файл появился — нужно его тоже защитить
+                                if (File.Exists(hiddenPath))
+                                {
+                                    // Удаляет старый скрытый файл, он устарел
+                                    File.Delete(hiddenPath);
+                                }
+
+                                // Ждёт стабилизации нового файла
+                                System.Threading.Thread.Sleep(2000);
+
+                                // Применяет защиту к новому файлу
+                                entry.Patches = ProtectionEngine.ApplyProtection(visiblePath);
+                            }
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        // Файл занят — ждёт и повторяет
+                        if (retry < maxRetries - 1)
+                            System.Threading.Thread.Sleep(1000);
+                    }
+                }
+
+                // Проверяет финальное состояние
+                if (!IsFileLauncher(visiblePath))
+                {
+                    MessageBox.Show(
+                        "Не удалось восстановить защиту — файл был изменён во время блокировки.\n" +
+                        "Возможно, программа всё ещё обновляется.\n\n" +
+                        "Попробуйте заблокировать вручную через Program Locker после завершения обновления.",
+                        "Предупреждение", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+                    // Пытаемся хотя бы сохранить текущие патчи
+                    store.EncryptAndStoreEntries(entries, password);
+                    SaveStore();
+                    return;
+                }
 
                 store.EncryptAndStoreEntries(entries, password);
                 SaveStore();
@@ -200,6 +323,185 @@ namespace Program_Locker
             }
         }
 
+        // WaitForStableState ждёт стабильного состояния: процесс не запущен и файл не меняется
+        private bool WaitForStableState(string exePath, string exeName, DateTime originalModified, long originalSize, out bool fileChanged)
+        {
+            fileChanged = false;
+
+            const int stabilizationChecks = 3;  // Количество проверок стабильности
+            const int checkIntervalMs = 1000;   // Интервал между проверками (1 сек)
+            const int maxTotalWaitMs = 20000;   // Максимальное общее ожидание (20 сек)
+
+            int totalWaited = 0;
+            int stableCount = 0;
+            DateTime lastModified = originalModified;
+            long lastSize = originalSize;
+
+            while (totalWaited < maxTotalWaitMs)
+            {
+                System.Threading.Thread.Sleep(checkIntervalMs);
+                totalWaited += checkIntervalMs;
+
+                // Проверяет, не запущен ли процесс
+                bool processRunning = IsProcessRunning(exePath, exeName);
+
+                // Проверяет, не изменился ли файл
+                bool fileExists = File.Exists(exePath);
+                DateTime currentModified = DateTime.MinValue;
+                long currentSize = 0;
+
+                if (fileExists)
+                {
+                    try
+                    {
+                        currentModified = File.GetLastWriteTimeUtc(exePath);
+                        currentSize = new FileInfo(exePath).Length;
+                    }
+                    catch
+                    {
+                        // Файл заблокирован — считаем нестабильным
+                        stableCount = 0;
+                        continue;
+                    }
+                }
+
+                // Проверяет стабильность
+                bool isStable = !processRunning &&
+                                fileExists &&
+                                currentModified == lastModified &&
+                                currentSize == lastSize;
+
+                if (isStable)
+                {
+                    stableCount++;
+                    if (stableCount >= stabilizationChecks)
+                    {
+                        // Состояние стабильно — проверяем, изменился ли файл относительно оригинала
+                        fileChanged = (currentModified != originalModified || currentSize != originalSize);
+                        return true;
+                    }
+                }
+                else
+                {
+                    // Сбрасывает счётчик стабильности
+                    stableCount = 0;
+
+                    // Если процесс запущен — ждёт его завершения
+                    if (processRunning)
+                    {
+                        WaitForAllProcessInstances(exePath, exeName);
+                    }
+                }
+
+                lastModified = currentModified;
+                lastSize = currentSize;
+            }
+
+            // Таймаут
+            return false;
+        }
+
+        // IsProcessRunning проверяет, запущен ли процесс с указанным именем и путём
+        private bool IsProcessRunning(string exePath, string exeName)
+        {
+            try
+            {
+                var processes = Process.GetProcessesByName(exeName);
+
+                foreach (var p in processes)
+                {
+                    try
+                    {
+                        string processPath = null;
+                        try
+                        {
+                            processPath = p.MainModule?.FileName;
+                        }
+                        catch
+                        {
+                            // Нет доступа — считает, что может быть наш
+                            return true;
+                        }
+
+                        if (processPath != null &&
+                            string.Equals(processPath, exePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
+                    }
+                    finally
+                    {
+                        p.Dispose();
+                    }
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        // IsChromeBrowser проверяет, является ли файл браузером Google Chrome по нескольким признакам
+        private bool IsChromeBrowser(string filePath, string exeName)
+        {
+            // Признак 1: Имя файла "chrome.exe"
+            string fileName = Path.GetFileNameWithoutExtension(filePath).ToLowerInvariant();
+            bool fileNameMatch = (fileName == "chrome");
+
+            // Признак 2: Имя процесса "chrome"
+            bool processNameMatch = (exeName.ToLowerInvariant() == "chrome");
+
+            // Признак 3: Путь содержит "Google\Chrome\Application"
+            string pathLower = filePath.ToLowerInvariant();
+            bool pathMatch = pathLower.Contains("google") &&
+                             pathLower.Contains("chrome") &&
+                             pathLower.Contains("application");
+
+            // Признак 4: Метаданные файла содержат "Google Chrome"
+            bool metadataMatch = false;
+            try
+            {
+                if (File.Exists(filePath))
+                {
+                    var versionInfo = FileVersionInfo.GetVersionInfo(filePath);
+                    metadataMatch = (versionInfo.ProductName?.IndexOf("Chrome", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                                    (versionInfo.FileDescription?.IndexOf("Chrome", StringComparison.OrdinalIgnoreCase) >= 0);
+                }
+            }
+            catch { }
+
+            // Считает Chrome, если совпадают минимум 2 признака
+            int matchCount = (fileNameMatch ? 1 : 0) +
+                             (processNameMatch ? 1 : 0) +
+                             (pathMatch ? 1 : 0) +
+                             (metadataMatch ? 1 : 0);
+
+            return matchCount >= 2;
+        }
+
+        // MonitorChromeUpdate следит за появлением new_chrome.exe пока Chrome работает
+        private bool MonitorChromeUpdate(string visiblePath, string exeName)
+        {
+            // Проверяет, это Chrome?
+            if (!IsChromeBrowser(visiblePath, exeName))
+                return false;
+
+            string chromeDir = Path.GetDirectoryName(visiblePath);
+            string newChromePath = Path.Combine(chromeDir, "new_chrome.exe");
+
+            // Проверяет new_chrome.exe каждые 300мс пока процесс работает
+            while (IsProcessRunning(visiblePath, exeName))
+            {
+                if (File.Exists(newChromePath))
+                {
+                    return true; // Обнаружено обновление!
+                }
+                System.Threading.Thread.Sleep(300);
+            }
+
+            // Финальная проверка после закрытия процесса
+            return File.Exists(newChromePath);
+        }
+
         // VerifyPassword проверяет мастер-пароль без выполнения разблокировки
         public bool VerifyPassword(string fakeExePath, string password)
         {
@@ -223,8 +525,11 @@ namespace Program_Locker
 
             tbPass.TextChanged += TbPass_TextChanged;
 
-            // Устанавливает обработчик нажатия клавиш на уровне формы, чтобы ловить глобальные команды (Ctrl+A, Delete)
+            // Устанавливает обработчик нажатия клавиш на уровне формы, чтобы ловить глобальные команды (Ctrl+A, Delete, Enter)
             this.KeyDown += Form_KeyDown;
+
+            // Устанавливает обработчик закрытия формы для продолжения мониторинга в фоне
+            this.FormClosing += ProgramForm_FormClosing;
         }
 
         // TbPass_TextChanged обновляет список файлов и статус, когда пользователь вводит пароль
@@ -234,9 +539,10 @@ namespace Program_Locker
                 !string.IsNullOrEmpty(store.MasterHashBase64) &&
                 store.VerifyMasterPassword(tbPass.Text))
             {
+                lblStatus.ForeColor = SystemColors.ControlText; // Сбрасывает цвет при верном пароле
                 RefreshFileList();
                 lblNotes.Text = "Примечание:\n" +
-                    "• Горячие клавиши: Ctrl+A — выделить всё, Delete — удалить выбранные.\n" +
+                    "• Горячие клавиши: Ctrl+A — выделить всё, Delete — удалить выбранные, Enter — запустить выбранные.\n" +
                     "• Заблокированный файл заменяется лаунчером, при запуске будет запрошен пароль.\n" +
                     "• После закрытия программы защита автоматически восстанавливается.\n" +
                     "• Мастер-пароль один для всех программ.\n" +
@@ -250,11 +556,20 @@ namespace Program_Locker
                 lblNotes.Visible = false;
 
                 if (string.IsNullOrEmpty(store.MasterHashBase64))
+                {
                     lblStatus.Text = "Статус: Мастер-пароль не установлен";
+                    lblStatus.ForeColor = Color.Red;
+                }
                 else if (string.IsNullOrEmpty(tbPass.Text))
+                {
                     lblStatus.Text = "Статус: Введите мастер-пароль";
+                    lblStatus.ForeColor = Color.Red;
+                }
                 else
+                {
                     lblStatus.Text = "Статус: —";
+                    lblStatus.ForeColor = SystemColors.ControlText;
+                }
             }
 
             // Обновляет состояние кнопок, чтобы включить их, если пароль верен
@@ -284,6 +599,14 @@ namespace Program_Locker
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
+            else if (e.KeyCode == Keys.Enter)
+            {
+                // Запускает выбранные программы по клавише Enter
+                if (lvFiles.SelectedItems.Count > 0 && btnRun.Enabled)
+                    BtnRun_Click(btnRun, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
         }
 
         // UpdateButtonStates обновляет состояние кнопок в зависимости от введенного пароля и выбора в списке
@@ -292,15 +615,18 @@ namespace Program_Locker
             bool hasPassword = !string.IsNullOrEmpty(tbPass?.Text) && store.VerifyMasterPassword(tbPass.Text);
             bool hasSelection = lvFiles.SelectedItems.Count > 0;
 
+            btnAddFile.Enabled = hasPassword;
+            btnRun.Enabled = hasPassword && hasSelection;
             btnLock.Enabled = hasPassword && hasSelection;
             btnUnlock.Enabled = hasPassword && hasSelection;
             btnRemoveEntry.Enabled = hasPassword && hasSelection;
             btnRefresh.Enabled = hasPassword;
-            btnAddFile.Enabled = hasPassword;
+                        
 
             if (!hasPassword && !string.IsNullOrEmpty(store.MasterHashBase64))
             {
-                lblStatus.Text = "Статус: Введите мастер-пароль для работы со списком!";
+                lblStatus.Text = "Статус: Введите мастер-пароль";
+                lblStatus.ForeColor = Color.Red;
             }
         }
 
@@ -912,6 +1238,398 @@ namespace Program_Locker
             RefreshFileList();
 
             MessageBox.Show($"Разблокировано: {unlocked}\nПропущено: {skipped}\nОшибок/удалено записей: {errors}", "Результат");
+        }
+
+        // BtnRun_Click запускает выбранные защищённые программы
+        private void BtnRun_Click(object sender, EventArgs e)
+        {
+            if (lvFiles.SelectedItems.Count == 0)
+            {
+                MessageBox.Show("Выберите файл(ы) из списка для запуска.", "Подсказка");
+                return;
+            }
+
+            if (!EnsurePasswordAvailable()) return;
+
+            string pass = tbPass.Text;
+            var entries = store.DecryptEntries(pass);
+
+            int launched = 0, skipped = 0, errors = 0;
+            var launchedEntries = new List<(FileEntry entry, string visiblePath, string hiddenPath)>();
+
+            foreach (ListViewItem item in lvFiles.SelectedItems)
+            {
+                if (item.Tag is not FileEntry entry) continue;
+
+                // Находит актуальную запись в entries
+                var actualEntry = entries.FirstOrDefault(e =>
+                    string.Equals(e.VisiblePath, entry.VisiblePath, StringComparison.OrdinalIgnoreCase));
+
+                if (actualEntry == null) continue;
+
+                string status = GetFileStatus(actualEntry);
+
+                // Можно запустить только защищённые программы
+                if (status != "Защищён")
+                {
+                    if (status == "Разблокирован")
+                    {
+                        // Уже разблокирована — просто запускаем
+                        try
+                        {
+                            Process.Start(actualEntry.VisiblePath);
+                            launched++;
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show($"Ошибка запуска {Path.GetFileName(actualEntry.VisiblePath)}:\n{ex.Message}", "Ошибка");
+                            errors++;
+                        }
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                    continue;
+                }
+
+                try
+                {
+                    string visiblePath = actualEntry.VisiblePath;
+                    string hiddenPath = actualEntry.HiddenPath;
+
+                    // Проверяет существование скрытого файла
+                    if (!File.Exists(hiddenPath))
+                    {
+                        MessageBox.Show($"Скрытый файл не найден: {hiddenPath}", "Ошибка");
+                        errors++;
+                        continue;
+                    }
+
+                    // Удаляет фейковый файл (лаунчер)
+                    if (File.Exists(visiblePath))
+                        File.Delete(visiblePath);
+
+                    // Перемещает оригинал на место фейкового
+                    File.Move(hiddenPath, visiblePath);
+
+                    // Восстанавливает все патчи
+                    ProtectionEngine.RemoveProtection(visiblePath, actualEntry.Patches);
+
+                    // Запускает программу
+                    Process.Start(visiblePath);
+
+                    // Добавляет в список для отслеживания
+                    launchedEntries.Add((actualEntry, visiblePath, hiddenPath));
+                    launched++;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Ошибка запуска {Path.GetFileName(actualEntry.VisiblePath)}:\n{ex.Message}", "Ошибка");
+                    errors++;
+                }
+            }
+
+            // Сохраняет текущее состояние
+            store.EncryptAndStoreEntries(entries, pass);
+            SaveStore();
+            RefreshFileList();
+
+            if (launched > 0)
+            {
+                string msg = $"Запущено программ: {launched}";
+                if (skipped > 0) msg += $"\nПропущено: {skipped}";
+                if (errors > 0) msg += $"\nОшибок: {errors}";
+
+                lblStatus.Text = msg;
+                lblStatus.ForeColor = SystemColors.ControlText;
+            }
+
+            // Запускает фоновое отслеживание для каждой программы
+            if (launchedEntries.Count > 0)
+            {
+                foreach (var (_, visiblePath, hiddenPath) in launchedEntries)
+                {
+                    // Запускает отслеживание в отдельном потоке и сохраняет задачу
+                    var task = System.Threading.Tasks.Task.Run(() =>
+                        MonitorAndRelock(visiblePath, hiddenPath, pass));
+
+                    lock (monitorTasksLock)
+                    {
+                        activeMonitorTasks.Add(task);
+                    }
+                }
+            }
+        }
+
+        // MonitorAndRelock отслеживает процесс и восстанавливает защиту после его завершения
+        private void MonitorAndRelock(string visiblePath, string hiddenPath, string password)
+        {
+            try
+            {
+                string exeName = Path.GetFileNameWithoutExtension(visiblePath);
+
+                // Даёт время процессу запуститься
+                System.Threading.Thread.Sleep(1000);
+
+                // Для Chrome: запускает мониторинг обновлений в параллельном потоке
+                bool chromeUpdateDetected = false;
+                var chromeMonitorTask = System.Threading.Tasks.Task.Run(() =>
+                {
+                    chromeUpdateDetected = MonitorChromeUpdate(visiblePath, exeName);
+                });
+
+                // Ждёт завершения всех процессов
+                WaitForAllProcessInstances(visiblePath, exeName);
+
+                // Ждёт завершения мониторинга Chrome
+                chromeMonitorTask.Wait(5000);
+
+                // Загружает актуальные entries
+                List<FileEntry> entries;
+                try
+                {
+                    entries = store.DecryptEntries(password);
+                }
+                catch
+                {
+                    return; // Не может расшифровать — выходит
+                }
+
+                var actualEntry = entries.FirstOrDefault(e =>
+                    string.Equals(e.VisiblePath, visiblePath, StringComparison.OrdinalIgnoreCase));
+
+                if (actualEntry == null) return;
+
+                // Проверяет результат мониторинга Chrome
+                if (chromeUpdateDetected)
+                {
+                    // Обнаружено обновление Chrome — снимает защиту
+                    entries.Remove(actualEntry);
+                    store.EncryptAndStoreEntries(entries, password);
+                    SaveStore();
+
+                    // Показывает сообщение поверх всех окон
+                    ShowTopMostMessageBox(
+                        "Обнаружено обновление Google Chrome.\n\n" +
+                        "Защита снята и НЕ будет восстановлена автоматически.\n" +
+                        "После завершения обновления заново добавьте Chrome в Program Locker.",
+                        "Обновление Chrome", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                    UpdateUIAfterRelock();
+                    return;
+                }
+
+                // Сохраняет информацию о файле для обнаружения обновлений
+                DateTime originalModified = DateTime.MinValue;
+                long originalSize = 0;
+
+                if (File.Exists(visiblePath))
+                {
+                    try
+                    {
+                        originalModified = File.GetLastWriteTimeUtc(visiblePath);
+                        originalSize = new FileInfo(visiblePath).Length;
+                    }
+                    catch { }
+                }
+
+                // Период стабилизации
+                if (!WaitForStableState(visiblePath, exeName, originalModified, originalSize, out bool fileChanged))
+                {
+                    return;
+                }
+
+                // Если файл не существует — ничего не делаем
+                if (!File.Exists(visiblePath))
+                {
+                    return;
+                }
+
+                // Восстанавливает защиту
+                int maxRetries = 5;
+                for (int retry = 0; retry < maxRetries; retry++)
+                {
+                    try
+                    {
+                        // Применяет новые патчи
+                        actualEntry.Patches = ProtectionEngine.ApplyProtection(visiblePath);
+
+                        // Перемещает в скрытое место
+                        if (File.Exists(hiddenPath))
+                            File.Delete(hiddenPath);
+                        File.Move(visiblePath, hiddenPath);
+
+                        // Копирует лаунчер
+                        string launcherPath = Path.Combine(
+                            Path.GetDirectoryName(Application.ExecutablePath),
+                            "Locker Launcher.exe");
+                        File.Copy(launcherPath, visiblePath, true);
+
+                        // Заменяет иконку
+                        IconReplacer.ReplaceIcon(hiddenPath, visiblePath);
+
+                        // Финальная проверка
+                        System.Threading.Thread.Sleep(500);
+
+                        if (IsFileLauncher(visiblePath))
+                        {
+                            // Успех — сохраняет конфиг
+                            store.EncryptAndStoreEntries(entries, password);
+                            SaveStore();
+                            break;
+                        }
+
+                        // Лаунчер был перезаписан — повторная попытка
+                        if (retry < maxRetries - 1)
+                        {
+                            if (File.Exists(visiblePath) && !IsFileLauncher(visiblePath))
+                            {
+                                if (File.Exists(hiddenPath))
+                                    File.Delete(hiddenPath);
+
+                                System.Threading.Thread.Sleep(2000);
+                                actualEntry.Patches = ProtectionEngine.ApplyProtection(visiblePath);
+                            }
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        if (retry < maxRetries - 1)
+                            System.Threading.Thread.Sleep(1000);
+                    }
+                    catch
+                    {
+                        break;
+                    }
+                }
+
+                UpdateUIAfterRelock();
+            }
+            catch
+            {
+                // Игнорирует ошибки в фоновом потоке
+            }
+            finally
+            {
+                // Удаляет текущую задачу из списка активных
+                CleanupCompletedMonitorTasks();
+            }
+        }
+
+        // UpdateUIAfterRelock обновляет UI после восстановления защиты (из фонового потока)
+        private void UpdateUIAfterRelock()
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (!string.IsNullOrEmpty(tbPass?.Text) && store.VerifyMasterPassword(tbPass.Text))
+                    {
+                        RefreshFileList();
+                    }
+                }));
+            }
+            else
+            {
+                if (!string.IsNullOrEmpty(tbPass?.Text) && store.VerifyMasterPassword(tbPass.Text))
+                {
+                    RefreshFileList();
+                }
+            }
+        }
+
+        // CleanupCompletedMonitorTasks удаляет завершённые задачи из списка активных
+        private void CleanupCompletedMonitorTasks()
+        {
+            lock (monitorTasksLock)
+            {
+                activeMonitorTasks.RemoveAll(t => t.IsCompleted);
+            }
+        }
+
+        // GetActiveMonitorCount возвращает количество активных задач мониторинга
+        private int GetActiveMonitorCount()
+        {
+            lock (monitorTasksLock)
+            {
+                activeMonitorTasks.RemoveAll(t => t.IsCompleted);
+                return activeMonitorTasks.Count;
+            }
+        }
+
+        // WaitForMonitorsAndExit ждёт завершения всех мониторов и закрывает приложение
+        private void WaitForMonitorsAndExit()
+        {
+            // Ждёт завершения всех мониторов
+            while (GetActiveMonitorCount() > 0)
+            {
+                System.Threading.Thread.Sleep(1000);
+            }
+
+            // Закрывает приложение
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() =>
+                {
+                    forceClose = true;
+                    Application.Exit();
+                }));
+            }
+            else
+            {
+                forceClose = true;
+                Application.Exit();
+            }
+        }
+
+        // ShowTopMostMessageBox показывает MessageBox поверх всех окон
+        private static void ShowTopMostMessageBox(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon)
+        {
+            using var tempForm = new Form
+            {
+                TopMost = true,
+                ShowInTaskbar = false,
+                FormBorderStyle = FormBorderStyle.None,
+                StartPosition = FormStartPosition.CenterScreen,
+                Size = new Size(1, 1),
+                Opacity = 0
+            };
+            tempForm.Show();
+            MessageBox.Show(tempForm, text, caption, buttons, icon);
+        }
+
+        // ProgramForm_FormClosing обрабатывает закрытие формы
+        private void ProgramForm_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            // Если принудительное закрытие — не мешаем
+            if (forceClose)
+                return;
+
+            int activeCount = GetActiveMonitorCount();
+
+            if (activeCount > 0)
+            {
+                var result = MessageBox.Show(
+                    $"Есть запущенных программ под мониторингом: {activeCount}\n\n" +
+                    "Закрыть Program Locker?\n" +
+                    "Защита будет восстановлена в фоновом режиме после закрытия программ.",
+                    "Подтверждение", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                if (result == DialogResult.Yes)
+                {
+                    // Скрывает форму, но продолжает работать в фоне
+                    this.Hide();
+                    e.Cancel = true;
+
+                    // Когда все мониторы завершатся — закрывает приложение
+                    System.Threading.Tasks.Task.Run(() => WaitForMonitorsAndExit());
+                }
+                else
+                {
+                    e.Cancel = true;
+                }
+            }
         }
 
         // IsFileLauncher проверяет, является ли файл копией "Locker Launcher.exe" по метаданным версии
