@@ -179,12 +179,12 @@
             // colStatus
             // 
             this.colStatus.Text = "Статус";
-            this.colStatus.Width = 115;
+            this.colStatus.Width = 167;
             // 
             // colHidden
             // 
             this.colHidden.Text = "Скрытый файл";
-            this.colHidden.Width = 300;
+            this.colHidden.Width = 248;
             // 
             // Version
             // 
@@ -194,7 +194,7 @@
             this.Version.Name = "Version";
             this.Version.Size = new System.Drawing.Size(57, 12);
             this.Version.TabIndex = 0;
-            this.Version.Text = "ver 28.12.25";
+            this.Version.Text = "ver 31.12.25";
             // 
             // Author
             // 
