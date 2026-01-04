@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2025 Otto
+﻿// Copyright (c) 2025-2026 Otto
 // Лицензия: MIT (см. LICENSE)
 
 using System;
@@ -22,6 +22,12 @@ namespace Program_Locker
             {
                 bool valid = form.VerifyPassword(args[0], args[1]);
                 Environment.Exit(valid ? 0 : 1);
+            }
+            // Режим запуска через ярлык
+            else if (args.Length >= 3 && args[2] == "--run")
+            {
+                form.RunFromShortcut(args[0], args[1]);
+                form.WaitForShortcutMonitoring(); // Ждёт восстановления защиты перед выходом
             }
             // Режим разблокировки и запуска
             else if (args.Length >= 2)

@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2025 Otto
+﻿// Copyright (c) 2025-2026 Otto
 // Лицензия: MIT (см. LICENSE)
 
 using System;
@@ -27,11 +27,13 @@ namespace Program_Locker
         private readonly List<System.Threading.Tasks.Task> activeMonitorTasks = [];
         private readonly object monitorTasksLock = new();
         private bool forceClose = false;
+        private System.Threading.Tasks.Task shortcutMonitorTask = null;
 
         // Отложенная проверка пароля
         private System.Windows.Forms.Timer passwordCheckTimer;
         private string cachedValidPassword = null;
         private bool isPasswordValid = false;
+        private ToolTip hotkeysToolTip;
 
         // ProgramForm инициализирует компоненты, загружает настройки и строит интерфейс
         public ProgramForm()
@@ -454,6 +456,27 @@ namespace Program_Locker
 
             // Устанавливает обработчик закрытия формы
             this.FormClosing += ProgramForm_FormClosing;
+
+            // Устанавливает обработчик двойного клика для запуска программы
+            lvFiles.DoubleClick += LvFiles_DoubleClick;
+
+            // Инициализирует ToolTip для кнопок
+            hotkeysToolTip = new ToolTip
+            {
+                AutoPopDelay = 10000,
+                InitialDelay = 500,
+                ReshowDelay = 200,
+                ShowAlways = true
+            };
+
+            // Устанавливает подсказки для кнопок
+            hotkeysToolTip.SetToolTip(btnAddFile, "Добавить файлы (Ctrl+O)");
+            hotkeysToolTip.SetToolTip(btnRun, "Запустить выбранные программы (Enter)");
+            hotkeysToolTip.SetToolTip(btnLock, "Заблокировать выбранные файлы (Ctrl+L)");
+            hotkeysToolTip.SetToolTip(btnUnlock, "Разблокировать выбранные файлы (Ctrl+U)");
+            hotkeysToolTip.SetToolTip(btnRemoveEntry, "Удалить выбранные записи (Delete)");
+            hotkeysToolTip.SetToolTip(btnRefresh, "Обновить список (F5)");
+            hotkeysToolTip.SetToolTip(btnShortcut, "Создать ярлык на рабочем столе (Ctrl+K)");
         }
 
         // PasswordCheckTimer_Tick выполняет отложенную проверку пароля
@@ -483,8 +506,8 @@ namespace Program_Locker
                 lblStatus.ForeColor = SystemColors.ControlText;
                 RefreshFileList();
                 lblNotes.Text = "Примечание:\n" +
-                    "• Горячие клавиши: Ctrl+A — выделить всё, Delete — удалить выбранные, Enter — запустить выбранные.\n" +
-                    "• Заблокированный файл заменяется лаунчером, при запуске будет запрошен пароль.\n" +
+                    "• Заблокированный файл заменяется лаунчером (если не снята галочка при добавлении), при запуске будет запрошен пароль.\n" +
+                    "• Созданные ярлыки добавляются на рабочий стол данного пользователя.\n" +
                     "• После закрытия программы защита автоматически восстанавливается.\n" +
                     "• Мастер-пароль один для всех программ.\n" +
                     "• Конфиг хранится тут: %AppData%\\Program Locker\\config.json";
@@ -536,9 +559,9 @@ namespace Program_Locker
         // Form_KeyDown обрабатывает глобальные горячие клавиши
         private void Form_KeyDown(object sender, KeyEventArgs e)
         {
+            // Ctrl+A — выделить всё
             if (e.Control && e.KeyCode == Keys.A)
             {
-                // Выделяет все элементы в списке
                 if (lvFiles.Items.Count > 0)
                 {
                     foreach (ListViewItem item in lvFiles.Items)
@@ -548,19 +571,59 @@ namespace Program_Locker
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
+            // Delete — удалить выбранные
             else if (e.KeyCode == Keys.Delete)
             {
-                // Запускает удаление записи по клавише Delete
                 if (lvFiles.SelectedItems.Count > 0 && btnRemoveEntry.Enabled)
                     BtnRemoveEntry_Click(btnRemoveEntry, EventArgs.Empty);
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
+            // Enter — запустить выбранные
             else if (e.KeyCode == Keys.Enter)
             {
-                // Запускает выбранные программы по клавише Enter
                 if (lvFiles.SelectedItems.Count > 0 && btnRun.Enabled)
                     BtnRun_Click(btnRun, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            // Ctrl+O — добавить файлы
+            else if (e.Control && e.KeyCode == Keys.O)
+            {
+                if (btnAddFile.Enabled)
+                    BtnAddFile_Click(btnAddFile, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            // Ctrl+L — заблокировать
+            else if (e.Control && e.KeyCode == Keys.L)
+            {
+                if (btnLock.Enabled)
+                    BtnLock_Click(btnLock, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            // Ctrl+U — разблокировать
+            else if (e.Control && e.KeyCode == Keys.U)
+            {
+                if (btnUnlock.Enabled)
+                    BtnUnlock_Click(btnUnlock, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            // F5 — обновить список
+            else if (e.KeyCode == Keys.F5)
+            {
+                if (btnRefresh.Enabled)
+                    BtnRefresh_Click(btnRefresh, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            // Ctrl+K — создать ярлык
+            else if (e.Control && e.KeyCode == Keys.K)
+            {
+                if (btnShortcut.Enabled)
+                    BtnShortcut_Click(btnShortcut, EventArgs.Empty);
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
@@ -579,6 +642,7 @@ namespace Program_Locker
             btnUnlock.Enabled = hasPassword && hasSelection;
             btnRemoveEntry.Enabled = hasPassword && hasSelection;
             btnRefresh.Enabled = hasPassword;
+            btnShortcut.Enabled = hasPassword && hasSelection;
 
             if (!hasPassword && !string.IsNullOrEmpty(store.MasterHashBase64))
             {
@@ -599,6 +663,7 @@ namespace Program_Locker
             btnUnlock.Enabled = hasPassword && hasSelection;
             btnRemoveEntry.Enabled = hasPassword && hasSelection;
             btnRefresh.Enabled = hasPassword;
+            btnShortcut.Enabled = hasPassword && hasSelection;
         }
 
         // LvFiles_SelectedIndexChanged обновляет строку статуса при изменении выбора в списке
@@ -619,6 +684,13 @@ namespace Program_Locker
             {
                 lblStatus.Text = "Статус: выберите файл(ы) из списка";
             }
+        }
+
+        // LvFiles_DoubleClick запускает выбранную программу из списка двойным кликом
+        private void LvFiles_DoubleClick(object sender, EventArgs e)
+        {
+            if (lvFiles.SelectedItems.Count > 0 && btnRun.Enabled)
+                BtnRun_Click(btnRun, EventArgs.Empty);
         }
 
         // RefreshFileList обновляет список файлов, дешифруя данные из конфига
@@ -1898,6 +1970,270 @@ namespace Program_Locker
             return true;
         }
 
+        // BtnRefresh_Click обновляет список файлов
+        private void BtnRefresh_Click(object sender, EventArgs e)
+        {
+            RefreshFileList();
+        }
+
+        // RunFromShortcut запускает файл через ярлык
+        public void RunFromShortcut(string visiblePath, string password)
+        {
+            try
+            {
+                List<FileEntry> entries;
+                try
+                {
+                    entries = store.DecryptEntries(password);
+                }
+                catch (CryptographicException)
+                {
+                    MessageBox.Show("Неверный пароль.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                catch
+                {
+                    MessageBox.Show("Ошибка расшифровки конфига.", "Ошибка");
+                    return;
+                }
+
+                string fullPath = Path.GetFullPath(visiblePath);
+                var entry = entries.FirstOrDefault(e =>
+                string.Equals(e.VisiblePath, fullPath, StringComparison.OrdinalIgnoreCase));
+
+                if (entry == null)
+                {
+                    MessageBox.Show(
+                    "Запись не найдена в Program Locker.\n\n" +
+                    "Возможно, файл был удалён из списка защиты.",
+                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                string status = GetFileStatus(entry);
+
+                // Режим без лаунчера
+                if (entry.NoLauncher)
+                {
+                    if (status == "Разблокирован (без лаунчера)")
+                    {
+                        if (File.Exists(entry.VisiblePath))
+                            Process.Start(entry.VisiblePath);
+                        else
+                            MessageBox.Show("Файл не найден: " + entry.VisiblePath, "Ошибка");
+                        return;
+                    }
+
+                    if (status == "Защищён (без лаунчера)")
+                    {
+                        if (!File.Exists(entry.HiddenPath))
+                        {
+                            MessageBox.Show("Защищённый файл не найден: " + entry.HiddenPath, "Ошибка");
+                            return;
+                        }
+
+                        // Разблокирует
+                        if (File.Exists(entry.VisiblePath))
+                            File.Delete(entry.VisiblePath);
+                        File.Move(entry.HiddenPath, entry.VisiblePath);
+                        ProtectionEngine.RemoveProtection(entry.VisiblePath, entry.Patches);
+
+                        // Запускает
+                        Process.Start(entry.VisiblePath);
+
+                        // Мониторит и восстанавливает защиту
+                        MonitorAndRelockFromShortcut(entry.VisiblePath, entry.HiddenPath, password);
+                        return;
+                    }
+
+                    MessageBox.Show($"Невозможно запустить.\nСтатус: {status}", "Ошибка");
+                    return;
+                }
+
+                // Режим с лаунчером
+                if (status == "Разблокирован")
+                {
+                    if (File.Exists(entry.VisiblePath))
+                        Process.Start(entry.VisiblePath);
+                    else
+                        MessageBox.Show("Файл не найден: " + entry.VisiblePath, "Ошибка");
+                    return;
+                }
+
+                if (status == "Защищён")
+                {
+                    RunAsUnlocker(entry.VisiblePath, password);
+                    return;
+                }
+
+                MessageBox.Show($"Невозможно запустить.\nСтатус: {status}", "Ошибка");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка: " + ex.Message, "Ошибка");
+            }
+        }
+
+        // MonitorAndRelockFromShortcut мониторит процесс и восстанавливает защиту (для режима без лаунчера через ярлык)
+        private void MonitorAndRelockFromShortcut(string visiblePath, string hiddenPath, string password)
+        {
+            shortcutMonitorTask = System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    string exeName = Path.GetFileNameWithoutExtension(visiblePath);
+                    System.Threading.Thread.Sleep(1000);
+
+                    DateTime originalModified = File.Exists(visiblePath) ? File.GetLastWriteTimeUtc(visiblePath) : DateTime.MinValue;
+                    long originalSize = File.Exists(visiblePath) ? new FileInfo(visiblePath).Length : 0;
+
+                    WaitForAllProcessInstances(visiblePath, exeName);
+
+                    if (!WaitForStableState(visiblePath, exeName, originalModified, originalSize, out _))
+                        return;
+
+                    if (!File.Exists(visiblePath))
+                        return;
+
+                    // Восстанавливает защиту
+                    for (int retry = 0; retry < 5; retry++)
+                    {
+                        try
+                        {
+                            var currentEntries = store.DecryptEntries(password);
+                            var currentEntry = currentEntries.FirstOrDefault(e =>
+                            string.Equals(e.VisiblePath, visiblePath, StringComparison.OrdinalIgnoreCase));
+
+                            if (currentEntry == null) return;
+
+                            currentEntry.Patches = ProtectionEngine.ApplyProtection(visiblePath);
+
+                            if (File.Exists(hiddenPath))
+                                File.Delete(hiddenPath);
+                            File.Move(visiblePath, hiddenPath);
+
+                            store.EncryptAndStoreEntries(currentEntries, password);
+                            SaveStore();
+                            break;
+                        }
+                        catch (IOException)
+                        {
+                            if (retry < 4) System.Threading.Thread.Sleep(1000);
+                        }
+                    }
+                }
+                catch { }
+            });
+        }
+
+        // WaitForShortcutMonitoring ожидает завершения мониторинга при запуске через ярлык
+        public void WaitForShortcutMonitoring()
+        {
+            shortcutMonitorTask?.Wait();
+        }
+
+        // BtnShortcut_Click создаёт ярлыки на рабочем столе для выбранных программ
+        private void BtnShortcut_Click(object sender, EventArgs e)
+        {
+            if (lvFiles.SelectedItems.Count == 0)
+            {
+                MessageBox.Show("Выберите файл(ы) из списка для создания ярлыков.", "Подсказка");
+                return;
+            }
+
+            if (!EnsurePasswordAvailable()) return;
+
+            string pass = tbPass.Text;
+            var entries = store.DecryptEntries(pass);
+
+            int created = 0, skipped = 0, errors = 0;
+            string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+            string launcherPath = Path.Combine(Path.GetDirectoryName(CurrentExePath), "Locker Launcher.exe");
+
+            if (!File.Exists(launcherPath))
+            {
+                MessageBox.Show(
+                "Не найден Locker Launcher.exe рядом с Program Locker!",
+                "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            foreach (ListViewItem item in lvFiles.SelectedItems)
+            {
+                if (item.Tag is not FileEntry entry) continue;
+
+                var actualEntry = entries.FirstOrDefault(e =>
+                string.Equals(e.VisiblePath, entry.VisiblePath, StringComparison.OrdinalIgnoreCase));
+
+                if (actualEntry == null)
+                {
+                    skipped++;
+                    continue;
+                }
+
+                try
+                {
+                    string programName = Path.GetFileNameWithoutExtension(actualEntry.VisiblePath);
+                    string shortcutPath = Path.Combine(desktopPath, programName + ".lnk");
+
+                    if (File.Exists(shortcutPath))
+                    {
+                        if (MessageBox.Show($"Ярлык «{programName}.lnk» уже существует.\nПерезаписать?",
+                        "Ярлык существует", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                        {
+                            skipped++;
+                            continue;
+                        }
+                    }
+
+                    // Иконка: скрытый файл → видимый файл (если не лаунчер) → лаунчер
+                    string iconPath = File.Exists(actualEntry.HiddenPath) ? actualEntry.HiddenPath
+                    : (File.Exists(actualEntry.VisiblePath) && !IsFileLauncher(actualEntry.VisiblePath))
+                    ? actualEntry.VisiblePath : launcherPath;
+
+                    CreateShortcut(shortcutPath, launcherPath, $"\"{actualEntry.VisiblePath}\"",
+                    Path.GetDirectoryName(launcherPath), iconPath,
+                    $"Запустить {programName} через Program Locker");
+
+                    created++;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Ошибка для «{Path.GetFileName(actualEntry.VisiblePath)}»:\n{ex.Message}", "Ошибка");
+                    errors++;
+                }
+            }
+
+            MessageBox.Show($"Создано: {created}\nПропущено: {skipped}\nОшибок: {errors}", "Результат");
+        }
+
+        // CreateShortcut создаёт ярлык Windows (.lnk) с помощью Windows Script Host
+        private static void CreateShortcut(string shortcutPath, string targetPath, string arguments,
+        string workingDirectory, string iconPath, string description)
+        {
+            Type shellType = Type.GetTypeFromProgID("WScript.Shell")
+            ?? throw new InvalidOperationException("Windows Script Host не найден.");
+
+            dynamic shell = Activator.CreateInstance(shellType);
+            try
+            {
+                dynamic shortcut = shell.CreateShortcut(shortcutPath);
+                try
+                {
+                    shortcut.TargetPath = targetPath;
+                    shortcut.Arguments = arguments;
+                    shortcut.WorkingDirectory = workingDirectory ?? "";
+                    if (!string.IsNullOrEmpty(iconPath) && File.Exists(iconPath))
+                        shortcut.IconLocation = iconPath + ",0";
+                    if (!string.IsNullOrEmpty(description))
+                        shortcut.Description = description;
+                    shortcut.Save();
+                }
+                finally { System.Runtime.InteropServices.Marshal.ReleaseComObject(shortcut); }
+            }
+            finally { System.Runtime.InteropServices.Marshal.ReleaseComObject(shell); }
+        }
+
         // Класс ConfigStore хранит всю конфигурацию приложения, включая зашифрованные записи
         class ConfigStore
         {
@@ -2634,7 +2970,7 @@ namespace Program_Locker
                     Width = 400,
                     Height = 50,
                     Text = "Снимите галочки с файлов, для которых НЕ нужен лаунчер.\n" +
-                           "Такие файлы можно запустить ТОЛЬКО через Program Locker.\n" +
+                           "Такие файлы запускаются через 'Program Locker' или создание ярлыка.\n" +
                            "(Использовать для браузеров: Chrome, Firefox..., из-за их системы защиты)."
                 };
 
@@ -2674,12 +3010,6 @@ namespace Program_Locker
                 this.CancelButton = btnCancel;
                 this.Controls.AddRange([lblInfo, clbFiles, btnOk, btnCancel]);
             }
-        }
-
-        // BtnRefresh_Click обновляет список файлов
-        private void BtnRefresh_Click(object sender, EventArgs e)
-        {
-            RefreshFileList();
         }
 
         // Ссылка на страницу автора

@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2025 Otto
+﻿// Copyright (c) 2025-2026 Otto
 // Лицензия: MIT (см. LICENSE)
 
 using Newtonsoft.Json.Linq;
@@ -151,7 +151,7 @@ namespace Locker_Launcher
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = ProgLocExePath,
-                    Arguments = $"\"{fakePath}\" \"{pass}\"",
+                    Arguments = $"\"{fakePath}\" \"{pass}\" --run",
                     UseShellExecute = true
                 };
 

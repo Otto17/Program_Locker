@@ -47,6 +47,7 @@
             this.Version = new System.Windows.Forms.Label();
             this.Author = new System.Windows.Forms.LinkLabel();
             this.btnRun = new System.Windows.Forms.Button();
+            this.btnShortcut = new System.Windows.Forms.Button();
             this.SuspendLayout();
             // 
             // lblPass
@@ -90,7 +91,7 @@
             this.btnLock.Location = new System.Drawing.Point(254, 300);
             this.btnLock.Name = "btnLock";
             this.btnLock.Size = new System.Drawing.Size(115, 23);
-            this.btnLock.TabIndex = 5;
+            this.btnLock.TabIndex = 6;
             this.btnLock.Text = "Заблокировать";
             this.btnLock.UseVisualStyleBackColor = true;
             this.btnLock.Click += new System.EventHandler(this.BtnLock_Click);
@@ -110,7 +111,7 @@
             this.btnUnlock.Location = new System.Drawing.Point(375, 300);
             this.btnUnlock.Name = "btnUnlock";
             this.btnUnlock.Size = new System.Drawing.Size(115, 23);
-            this.btnUnlock.TabIndex = 6;
+            this.btnUnlock.TabIndex = 7;
             this.btnUnlock.Text = "Разблокировать";
             this.btnUnlock.UseVisualStyleBackColor = true;
             this.btnUnlock.Click += new System.EventHandler(this.BtnUnlock_Click);
@@ -120,7 +121,7 @@
             this.btnRemoveEntry.Location = new System.Drawing.Point(496, 300);
             this.btnRemoveEntry.Name = "btnRemoveEntry";
             this.btnRemoveEntry.Size = new System.Drawing.Size(115, 23);
-            this.btnRemoveEntry.TabIndex = 7;
+            this.btnRemoveEntry.TabIndex = 8;
             this.btnRemoveEntry.Text = "Удалить запись";
             this.btnRemoveEntry.UseVisualStyleBackColor = true;
             this.btnRemoveEntry.Click += new System.EventHandler(this.BtnRemoveEntry_Click);
@@ -130,7 +131,7 @@
             this.btnRefresh.Location = new System.Drawing.Point(617, 300);
             this.btnRefresh.Name = "btnRefresh";
             this.btnRefresh.Size = new System.Drawing.Size(115, 23);
-            this.btnRefresh.TabIndex = 8;
+            this.btnRefresh.TabIndex = 9;
             this.btnRefresh.Text = "Обновить список";
             this.btnRefresh.UseVisualStyleBackColor = true;
             this.btnRefresh.Click += new System.EventHandler(this.BtnRefresh_Click);
@@ -194,7 +195,7 @@
             this.Version.Name = "Version";
             this.Version.Size = new System.Drawing.Size(57, 12);
             this.Version.TabIndex = 0;
-            this.Version.Text = "ver 31.12.25";
+            this.Version.Text = "ver 04.01.26";
             // 
             // Author
             // 
@@ -203,7 +204,7 @@
             this.Author.Location = new System.Drawing.Point(688, 442);
             this.Author.Name = "Author";
             this.Author.Size = new System.Drawing.Size(51, 12);
-            this.Author.TabIndex = 9;
+            this.Author.TabIndex = 11;
             this.Author.TabStop = true;
             this.Author.Text = "Автор Otto";
             this.Author.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.Author_LinkClicked);
@@ -213,16 +214,27 @@
             this.btnRun.Location = new System.Drawing.Point(133, 300);
             this.btnRun.Name = "btnRun";
             this.btnRun.Size = new System.Drawing.Size(115, 23);
-            this.btnRun.TabIndex = 11;
+            this.btnRun.TabIndex = 5;
             this.btnRun.Text = "Запуск";
             this.btnRun.UseVisualStyleBackColor = true;
             this.btnRun.Click += new System.EventHandler(this.BtnRun_Click);
+            // 
+            // btnShortcut
+            // 
+            this.btnShortcut.Location = new System.Drawing.Point(617, 329);
+            this.btnShortcut.Name = "btnShortcut";
+            this.btnShortcut.Size = new System.Drawing.Size(115, 23);
+            this.btnShortcut.TabIndex = 10;
+            this.btnShortcut.Text = "Создать ярлык";
+            this.btnShortcut.UseVisualStyleBackColor = true;
+            this.btnShortcut.Click += new System.EventHandler(this.BtnShortcut_Click);
             // 
             // ProgramForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(743, 460);
+            this.Controls.Add(this.btnShortcut);
             this.Controls.Add(this.btnRun);
             this.Controls.Add(this.Author);
             this.Controls.Add(this.Version);
@@ -270,6 +282,7 @@
         private System.Windows.Forms.Label Version;
         private System.Windows.Forms.LinkLabel Author;
         private System.Windows.Forms.Button btnRun;
+        private System.Windows.Forms.Button btnShortcut;
     }
 }
 

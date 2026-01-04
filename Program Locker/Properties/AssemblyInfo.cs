@@ -10,7 +10,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("Program Locker")]
-[assembly: AssemblyCopyright("Copyright ©  2025 Otto")]
+[assembly: AssemblyCopyright("Copyright ©  2025-2026 Otto")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
@@ -29,5 +29,5 @@ using System.Runtime.InteropServices;
 //      Номер сборки
 //      Редакция
 //
-[assembly: AssemblyVersion("31.12.25")]
-[assembly: AssemblyFileVersion("31.12.25")]
+[assembly: AssemblyVersion("04.01.26")]
+[assembly: AssemblyFileVersion("04.01.26")]
