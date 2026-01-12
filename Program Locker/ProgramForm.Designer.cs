@@ -48,6 +48,7 @@
             this.Author = new System.Windows.Forms.LinkLabel();
             this.btnRun = new System.Windows.Forms.Button();
             this.btnShortcut = new System.Windows.Forms.Button();
+            this.btnService = new System.Windows.Forms.Button();
             this.SuspendLayout();
             // 
             // lblPass
@@ -195,7 +196,7 @@
             this.Version.Name = "Version";
             this.Version.Size = new System.Drawing.Size(57, 12);
             this.Version.TabIndex = 0;
-            this.Version.Text = "ver 04.01.26";
+            this.Version.Text = "ver 12.01.26";
             // 
             // Author
             // 
@@ -229,11 +230,22 @@
             this.btnShortcut.UseVisualStyleBackColor = true;
             this.btnShortcut.Click += new System.EventHandler(this.BtnShortcut_Click);
             // 
+            // btnService
+            // 
+            this.btnService.Location = new System.Drawing.Point(496, 329);
+            this.btnService.Name = "btnService";
+            this.btnService.Size = new System.Drawing.Size(115, 23);
+            this.btnService.TabIndex = 12;
+            this.btnService.Text = "?";
+            this.btnService.UseVisualStyleBackColor = true;
+            this.btnService.Click += new System.EventHandler(this.BtnService_Click);
+            // 
             // ProgramForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(743, 460);
+            this.Controls.Add(this.btnService);
             this.Controls.Add(this.btnShortcut);
             this.Controls.Add(this.btnRun);
             this.Controls.Add(this.Author);
@@ -255,7 +267,6 @@
             this.KeyPreview = true;
             this.MaximizeBox = false;
             this.Name = "ProgramForm";
-            this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "Program Locker - Менеджер защиты исполняемых файлов";
             this.ResumeLayout(false);
             this.PerformLayout();
@@ -283,6 +294,7 @@
         private System.Windows.Forms.LinkLabel Author;
         private System.Windows.Forms.Button btnRun;
         private System.Windows.Forms.Button btnShortcut;
+        private System.Windows.Forms.Button btnService;
     }
 }
 

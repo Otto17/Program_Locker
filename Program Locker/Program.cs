@@ -23,16 +23,15 @@ namespace Program_Locker
                 bool valid = form.VerifyPassword(args[0], args[1]);
                 Environment.Exit(valid ? 0 : 1);
             }
-            // Режим запуска через ярлык
+            // Режим запуска через ярлык (отслеживается службой)
             else if (args.Length >= 3 && args[2] == "--run")
             {
-                form.RunFromShortcut(args[0], args[1]);
-                form.WaitForShortcutMonitoring(); // Ждёт восстановления защиты перед выходом
+                form.RunFromShortcutNoWait(args[0], args[1]);   // Сразу выходит - мониторингом займётся служба
             }
-            // Режим разблокировки и запуска
+            // Режим разблокировки и запуска (через лаунчер)
             else if (args.Length >= 2)
             {
-                form.RunAsUnlocker(args[0], args[1]);
+                form.RunAsUnlockerNoWait(args[0], args[1]); // Сразу выходит - мониторингом займётся служба
             }
             // Обычный режим с GUI
             else

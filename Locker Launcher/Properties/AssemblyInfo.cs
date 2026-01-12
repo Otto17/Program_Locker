@@ -29,5 +29,5 @@ using System.Runtime.InteropServices;
 //      Номер сборки
 //      Редакция
 //
-[assembly: AssemblyVersion("04.01.26")]
-[assembly: AssemblyFileVersion("04.01.26")]
+[assembly: AssemblyVersion("12.01.26")]
+[assembly: AssemblyFileVersion("12.01.26")]

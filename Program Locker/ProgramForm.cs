@@ -11,6 +11,7 @@ using System.Drawing;
 using Newtonsoft.Json;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.ServiceProcess;
 
 namespace Program_Locker
 {
@@ -20,6 +21,8 @@ namespace Program_Locker
         static readonly string AppFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Program Locker");
         static readonly string ConfigPath = Path.Combine(AppFolder, "config.json"); // Сам конфиг
         static readonly string CurrentExePath = Application.ExecutablePath; // Путь к самой программе (Program Locker.exe)
+        static readonly string MonitorExePath = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "Locker Monitor.exe"); // Путь к самой службе
+        const string ServiceName = "Locker Monitor";    // Имя службы
 
         ConfigStore store;  // Хранит загруженные настройки приложения
 
@@ -28,6 +31,10 @@ namespace Program_Locker
         private readonly object monitorTasksLock = new();
         private bool forceClose = false;
         private System.Threading.Tasks.Task shortcutMonitorTask = null;
+
+        // Список программ, запущенных из GUI (для случая удаления службы)
+        private readonly List<(string visiblePath, string hiddenPath, string password, bool noLauncher)> launchedFromGui = [];
+        private readonly object launchedFromGuiLock = new();
 
         // Отложенная проверка пароля
         private System.Windows.Forms.Timer passwordCheckTimer;
@@ -104,6 +111,8 @@ namespace Program_Locker
 
                 // Запускает программу
                 Process.Start(visiblePath);
+
+                RegisterWithMonitor(visiblePath, hiddenPath, password, entry.NoLauncher);
 
                 // Ждёт пока ВСЕ процессы этой программы завершатся
                 string exeName = Path.GetFileNameWithoutExtension(visiblePath);
@@ -242,6 +251,76 @@ namespace Program_Locker
 
                 store.EncryptAndStoreEntries(entries, password);
                 SaveStore();
+                UnregisterFromMonitor(visiblePath);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка: " + ex.Message);
+            }
+        }
+
+        // RunAsUnlockerNoWait выполняет разблокировку, запуск и сразу завершается (отслеживается службой)
+        public void RunAsUnlockerNoWait(string fakeExePath, string password)
+        {
+            try
+            {
+                List<FileEntry> entries;
+                try
+                {
+                    entries = store.DecryptEntries(password);
+                }
+                catch (CryptographicException)
+                {
+                    MessageBox.Show("Неверный пароль.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                catch
+                {
+                    MessageBox.Show("Ошибка расшифровки конфига.", "Ошибка");
+                    return;
+                }
+
+                string fullFake = Path.GetFullPath(fakeExePath);
+                var entry = entries.FirstOrDefault(e => string.Equals(e.VisiblePath, fullFake, StringComparison.OrdinalIgnoreCase));
+
+                if (entry == null)
+                {
+                    MessageBox.Show("Запись не найдена.");
+                    return;
+                }
+
+                string visiblePath = fullFake;
+                string hiddenPath = entry.HiddenPath;
+
+                if (!File.Exists(hiddenPath))
+                {
+                    MessageBox.Show(
+                        "Оригинальный файл не найден.\n" +
+                        "Возможно, система находится в некорректном состоянии после предыдущего сбоя.\n\n" +
+                        "Попробуйте разблокировать файл через основной интерфейс Program Locker.exe.",
+                        "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                // Удаляет фейковый файл (лаунчер)
+                if (File.Exists(visiblePath))
+                {
+                    File.Delete(visiblePath);
+                }
+
+                // Перемещает оригинал на место фейкового
+                File.Move(hiddenPath, visiblePath);
+
+                // Восстанавливает все патчи
+                ProtectionEngine.RemoveProtection(visiblePath, entry.Patches);
+
+                // Регистрирует в службе мониторинга
+                RegisterWithMonitor(visiblePath, hiddenPath, password, entry.NoLauncher);
+
+                // Запускает программу
+                Process.Start(visiblePath);
+
+                // Сразу выходит — мониторингом займётся служба
             }
             catch (Exception ex)
             {
@@ -340,7 +419,7 @@ namespace Program_Locker
                     }
                     catch
                     {
-                        // Файл заблокирован — считаем нестабильным
+                        // Файл заблокирован — считает нестабильным
                         stableCount = 0;
                         continue;
                     }
@@ -357,7 +436,7 @@ namespace Program_Locker
                     stableCount++;
                     if (stableCount >= stabilizationChecks)
                     {
-                        // Состояние стабильно — проверяем, изменился ли файл относительно оригинала
+                        // Состояние стабильно — проверяет, изменился ли файл относительно оригинала
                         fileChanged = (currentModified != originalModified || currentSize != originalSize);
                         return true;
                     }
@@ -477,6 +556,7 @@ namespace Program_Locker
             hotkeysToolTip.SetToolTip(btnRemoveEntry, "Удалить выбранные записи (Delete)");
             hotkeysToolTip.SetToolTip(btnRefresh, "Обновить список (F5)");
             hotkeysToolTip.SetToolTip(btnShortcut, "Создать ярлык на рабочем столе (Ctrl+K)");
+            UpdateServiceButtonState();
         }
 
         // PasswordCheckTimer_Tick выполняет отложенную проверку пароля
@@ -537,6 +617,7 @@ namespace Program_Locker
             }
 
             UpdateButtonStates();
+            UpdateServiceButtonState();
         }
 
         // TbPass_TextChanged запускает отложенную проверку пароля
@@ -965,7 +1046,7 @@ namespace Program_Locker
             if (lvFiles.SelectedItems.Count == 0) return;
             if (!EnsurePasswordAvailable()) return;
 
-            // Подсчитываем сколько файлов защищено
+            // Подсчитывает сколько файлов защищено
             int protectedCount = 0;
             foreach (ListViewItem item in lvFiles.SelectedItems)
             {
@@ -1136,6 +1217,361 @@ namespace Program_Locker
             File.WriteAllText(ConfigPath, json, Encoding.UTF8);
         }
 
+        // RegisterWithMonitor регистрирует задачу в Locker Monitor
+        private void RegisterWithMonitor(string visiblePath, string hiddenPath, string password, bool noLauncher)
+        {
+            try
+            {
+                if (!File.Exists(MonitorExePath))
+                    return;
+
+                // Шифрует пароль DPAPI с LocalMachine scope (чтобы служба могла расшифровать)
+                byte[] passwordBytes = Encoding.UTF8.GetBytes(password);
+                byte[] encryptedBytes = System.Security.Cryptography.ProtectedData.Protect(passwordBytes, null, System.Security.Cryptography.DataProtectionScope.LocalMachine);
+                string encryptedPassword = Convert.ToBase64String(encryptedBytes);
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = MonitorExePath,
+                    Arguments = $"--add \"{visiblePath}\" \"{hiddenPath}\" \"{encryptedPassword}\" {(noLauncher ? "true" : "false")}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = Process.Start(startInfo);
+                process?.WaitForExit(5000);
+            }
+            catch { }
+        }
+
+        // UnregisterFromMonitor удаляет задачу из Locker Monitor
+        private void UnregisterFromMonitor(string visiblePath)
+        {
+            try
+            {
+                if (!File.Exists(MonitorExePath))
+                    return;
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = MonitorExePath,
+                    Arguments = $"--remove \"{visiblePath}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = Process.Start(startInfo);
+                process?.WaitForExit(5000);
+            }
+            catch { }
+        }
+
+        // IsServiceInstalled проверяет, установлена ли служба Locker Monitor
+        private bool IsServiceInstalled()
+        {
+            try
+            {
+                using var sc = new ServiceController(ServiceName);
+                var status = sc.Status; // Попытка получить статус вызовет исключение если служба не установлена
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // IsServiceRunning проверяет, запущена ли служба Locker Monitor
+        private bool IsServiceRunning()
+        {
+            try
+            {
+                using var sc = new ServiceController(ServiceName);
+                return sc.Status == ServiceControllerStatus.Running;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // InstallAndStartService устанавливает и запускает службу Locker Monitor
+        private bool InstallAndStartService()
+        {
+            try
+            {
+                if (!File.Exists(MonitorExePath))
+                {
+                    MessageBox.Show(
+                        "Не найден файл Locker Monitor.exe\n\n" +
+                        $"Ожидаемый путь: {MonitorExePath}",
+                        "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return false;
+                }
+
+                // Устанавливает службу через sc.exe (без создания лог-файлов)
+                string scArgs = $"create \"{ServiceName}\" binPath= \"\\\"{MonitorExePath}\\\"\" start= auto DisplayName= \"Locker Monitor Service\"";
+
+                var installInfo = new ProcessStartInfo
+                {
+                    FileName = "sc.exe",
+                    Arguments = scArgs,
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+
+                using (var process = Process.Start(installInfo))
+                {
+                    process?.WaitForExit(30000);
+                }
+
+                // Небольшая пауза для завершения установки
+                System.Threading.Thread.Sleep(500);
+
+                // Проверяет установку
+                if (!IsServiceInstalled())
+                {
+                    MessageBox.Show(
+                        "Не удалось установить службу.\n" +
+                        "Попробуйте запустить Program Locker от имени администратора.",
+                        "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return false;
+                }
+
+                // Описание службы
+                var descInfo = new ProcessStartInfo
+                {
+                    FileName = "sc.exe",
+                    Arguments = $"description \"{ServiceName}\" \"Служба программы 'Program Locker'. Отслеживает разблокированные программы и восстанавливает защиту при их закрытии.\"",
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+
+                using (var process = Process.Start(descInfo))
+                {
+                    process?.WaitForExit(5000);
+                }
+
+                // Перезапуск при сбоях (1 минута для 1-го, 2-го и 3-го сбоя)
+                var failureInfo = new ProcessStartInfo
+                {
+                    FileName = "sc.exe",
+                    Arguments = $"failure \"{ServiceName}\" reset= 86400 actions= restart/60000/restart/60000/restart/60000",
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+
+                using (var process = Process.Start(failureInfo))
+                {
+                    process?.WaitForExit(5000);
+                }
+
+                // Запускает службу
+                try
+                {
+                    using var sc = new ServiceController(ServiceName);
+                    if (sc.Status != ServiceControllerStatus.Running)
+                    {
+                        sc.Start();
+                        sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        $"Служба установлена, но не удалось её запустить:\n{ex.Message}\n\n" +
+                        "Попробуйте запустить вручную через services.msc",
+                        "Предупреждение", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+
+                return true;
+            }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+            {
+                MessageBox.Show(
+                    "Для установки службы требуются права администратора.",
+                    "Отменено", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Ошибка при установке службы:\n{ex.Message}",
+                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        // StopAndUninstallService останавливает и удаляет службу Locker Monitor
+        private bool StopAndUninstallService()
+        {
+            try
+            {
+                // Сначала останавливает службу
+                try
+                {
+                    using var sc = new ServiceController(ServiceName);
+                    if (sc.Status == ServiceControllerStatus.Running)
+                    {
+                        sc.Stop();
+                        sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
+                    }
+                }
+                catch { }
+
+                // Небольшая пауза
+                System.Threading.Thread.Sleep(500);
+
+                // Удаляет службу через sc.exe
+                var uninstallInfo = new ProcessStartInfo
+                {
+                    FileName = "sc.exe",
+                    Arguments = $"delete \"{ServiceName}\"",
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+
+                using (var process = Process.Start(uninstallInfo))
+                {
+                    process?.WaitForExit(30000);
+                }
+
+                // Проверяет результат
+                System.Threading.Thread.Sleep(1000);
+                if (IsServiceInstalled())
+                {
+                    MessageBox.Show(
+                        "Не удалось удалить службу.\n" +
+                        "Попробуйте удалить вручную через services.msc",
+                        "Предупреждение", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+
+                return true;
+            }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+            {
+                MessageBox.Show(
+                    "Для удаления службы требуются права администратора.",
+                    "Отменено", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Ошибка при удалении службы:\n{ex.Message}",
+                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        // UpdateServiceButtonState обновляет текст и состояние кнопки службы
+        private void UpdateServiceButtonState()
+        {
+            if (btnService == null) return;
+
+            try
+            {
+                bool hasPassword = isPasswordValid && tbPass.Text == cachedValidPassword;
+
+                if (!File.Exists(MonitorExePath))
+                {
+                    btnService.Text = "Служба недоступна";
+                    btnService.Enabled = false;
+                    hotkeysToolTip?.SetToolTip(btnService, "Файл Locker Monitor.exe не найден");
+                    return;
+                }
+
+                // Кнопка доступна только при валидном пароле
+                btnService.Enabled = hasPassword;
+
+                if (IsServiceRunning())
+                {
+                    btnService.Text = "Удалить службу";
+                    hotkeysToolTip?.SetToolTip(btnService, "Остановить и удалить службу мониторинга");
+                }
+                else if (IsServiceInstalled())
+                {
+                    btnService.Text = "Запустить службу";
+                    hotkeysToolTip?.SetToolTip(btnService, "Запустить установленную службу мониторинга");
+                }
+                else
+                {
+                    btnService.Text = "Установить службу";
+                    hotkeysToolTip?.SetToolTip(btnService, "Установить и запустить службу мониторинга");
+                }
+            }
+            catch
+            {
+                btnService.Text = "Служба";
+                btnService.Enabled = false;
+            }
+        }
+
+        // BtnService_Click обрабатывает нажатие кнопки управления службой
+        private void BtnService_Click(object sender, EventArgs e)
+        {
+            btnService.Enabled = false;
+            this.Cursor = Cursors.WaitCursor;
+
+            try
+            {
+                if (IsServiceRunning())
+                {
+                    // Служба запущена — останавливаем и удаляем
+                    if (StopAndUninstallService())
+                    {
+                        MessageBox.Show(
+                            "Служба успешно остановлена и удалена.",
+                            "Готово", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                }
+                else if (IsServiceInstalled())
+                {
+                    // Служба установлена, но не запущена — запускает
+                    try
+                    {
+                        using var sc = new ServiceController(ServiceName);
+                        sc.Start();
+                        sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+                        MessageBox.Show(
+                            "Служба успешно запущена.",
+                            "Готово", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(
+                            $"Не удалось запустить службу:\n{ex.Message}",
+                            "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+                else
+                {
+                    // Служба не установлена — устанавливает и запускает
+                    if (InstallAndStartService())
+                    {
+                        MessageBox.Show(
+                            "Служба успешно установлена и запущена!",
+                            "Готово", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                }
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
+                UpdateServiceButtonState();
+            }
+        }
+
         // BtnSetPass_Click устанавливает или изменяет мастер-пароль
         private void BtnSetPass_Click(object sender, EventArgs e)
         {
@@ -1287,7 +1723,7 @@ namespace Program_Locker
                             // Патчим файл
                             actualEntry.Patches = ProtectionEngine.ApplyProtection(actualEntry.VisiblePath);
 
-                            // Переименовываем в _locked
+                            // Переименовывает в _locked
                             if (File.Exists(actualEntry.HiddenPath))
                                 File.Delete(actualEntry.HiddenPath);
                             File.Move(actualEntry.VisiblePath, actualEntry.HiddenPath);
@@ -1469,7 +1905,7 @@ namespace Program_Locker
                 // Режим без лаунчера
                 if (actualEntry.NoLauncher)
                 {
-                    // Если разблокирован — просто запускаем без снятия патчей
+                    // Если разблокирован — просто запускает без снятия патчей
                     if (status == "Разблокирован (без лаунчера)")
                     {
                         try
@@ -1485,7 +1921,7 @@ namespace Program_Locker
                         continue;
                     }
 
-                    // Если не защищён и не разблокирован — пропускаем
+                    // Если не защищён и не разблокирован — пропускает
                     if (!status.Contains("Защищён"))
                     {
                         skipped++;
@@ -1518,6 +1954,14 @@ namespace Program_Locker
                         // Добавляет для мониторинга
                         launchedEntries.Add((actualEntry, visiblePath, hiddenPath));
                         launched++;
+
+                        RegisterWithMonitor(visiblePath, hiddenPath, pass, true);
+
+                        // Сохраняет для случая удаления службы
+                        lock (launchedFromGuiLock)
+                        {
+                            launchedFromGui.Add((visiblePath, hiddenPath, pass, true));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -1569,6 +2013,14 @@ namespace Program_Locker
 
                     launchedEntries.Add((actualEntry, visiblePath, hiddenPath));
                     launched++;
+
+                    RegisterWithMonitor(visiblePath, hiddenPath, pass, false);
+
+                    // Сохраняет для случая удаления службы
+                    lock (launchedFromGuiLock)
+                    {
+                        launchedFromGui.Add((visiblePath, hiddenPath, pass, false));
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1592,8 +2044,8 @@ namespace Program_Locker
                 lblStatus.ForeColor = SystemColors.ControlText;
             }
 
-            // Запускает фоновое отслеживание для каждой программы
-            if (launchedEntries.Count > 0)
+            // Запускает фоновое отслеживание только если служба НЕ работает
+            if (launchedEntries.Count > 0 && !IsServiceRunning())
             {
                 foreach (var (_, visiblePath, hiddenPath) in launchedEntries)
                 {
@@ -1678,6 +2130,14 @@ namespace Program_Locker
                             // Сохраняет
                             store.EncryptAndStoreEntries(entries, password);
                             SaveStore();
+                            UnregisterFromMonitor(visiblePath);
+
+                            // Удаляет из списка запущенных
+                            lock (launchedFromGuiLock)
+                            {
+                                launchedFromGui.RemoveAll(x => string.Equals(x.visiblePath, visiblePath, StringComparison.OrdinalIgnoreCase));
+                            }
+
                             break;
                         }
                         catch (IOException)
@@ -1711,7 +2171,7 @@ namespace Program_Locker
                     return;
                 }
 
-                // Если файл не существует — ничего не делаем
+                // Если файл не существует — ничего не делает
                 if (!File.Exists(visiblePath))
                 {
                     return;
@@ -1748,6 +2208,14 @@ namespace Program_Locker
                             // Успех — сохраняет конфиг
                             store.EncryptAndStoreEntries(entries, password);
                             SaveStore();
+                            UnregisterFromMonitor(visiblePath);
+
+                            // Удаляет из списка запущенных
+                            lock (launchedFromGuiLock)
+                            {
+                                launchedFromGui.RemoveAll(x => string.Equals(x.visiblePath, visiblePath, StringComparison.OrdinalIgnoreCase));
+                            }
+
                             break;
                         }
 
@@ -1829,11 +2297,48 @@ namespace Program_Locker
             }
         }
 
+        // GetLaunchedFromGuiCount возвращает количество программ, запущенных из GUI
+        private int GetLaunchedFromGuiCount()
+        {
+            lock (launchedFromGuiLock)
+            {
+                // Удаляет записи для программ, которые уже не запущены
+                launchedFromGui.RemoveAll(x =>
+                {
+                    string exeName = Path.GetFileNameWithoutExtension(x.visiblePath);
+                    return !IsProcessRunning(x.visiblePath, exeName);
+                });
+                return launchedFromGui.Count;
+            }
+        }
+
+        // StartMonitoringForLaunchedPrograms запускает фоновый мониторинг для всех программ из GUI
+        private void StartMonitoringForLaunchedPrograms()
+        {
+            List<(string visiblePath, string hiddenPath, string password, bool noLauncher)> toMonitor;
+
+            lock (launchedFromGuiLock)
+            {
+                toMonitor = [.. launchedFromGui];
+            }
+
+            foreach (var (visiblePath, hiddenPath, password, noLauncher) in toMonitor)
+            {
+                var task = System.Threading.Tasks.Task.Run(() =>
+                    MonitorAndRelock(visiblePath, hiddenPath, password));
+
+                lock (monitorTasksLock)
+                {
+                    activeMonitorTasks.Add(task);
+                }
+            }
+        }
+
         // WaitForMonitorsAndExit ждёт завершения всех мониторов и закрывает приложение
         private void WaitForMonitorsAndExit()
         {
             // Ждёт завершения всех мониторов
-            while (GetActiveMonitorCount() > 0)
+            while (GetActiveMonitorCount() > 0 || GetLaunchedFromGuiCount() > 0)
             {
                 System.Threading.Thread.Sleep(1000);
             }
@@ -1873,16 +2378,53 @@ namespace Program_Locker
         // ProgramForm_FormClosing обрабатывает закрытие формы
         private void ProgramForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            // Если принудительное закрытие — не мешаем
+            // Если принудительное закрытие
             if (forceClose)
                 return;
 
+            // Проверяет, есть ли программы, запущенные из GUI
+            int launchedCount = GetLaunchedFromGuiCount();
             int activeCount = GetActiveMonitorCount();
 
+            // Если служба работает И нет локальных задач — просто закрывает
+            if (IsServiceRunning() && launchedCount == 0 && activeCount == 0)
+                return;
+
+            // Если служба НЕ работает, но есть программы из GUI — нужно запустить мониторинг
+            if (!IsServiceRunning() && launchedCount > 0 && activeCount == 0)
+            {
+                var result = MessageBox.Show(
+                    $"Есть запущенные программы под мониторингом: {launchedCount}\n\n" +
+                    "Служба мониторинга не запущена!\n\n" +
+                    "Закрыть Program Locker?\n" +
+                    "Защита будет восстановлена в фоновом режиме после закрытия программ.",
+                    "Подтверждение", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                if (result == DialogResult.Yes)
+                {
+                    // Запускает фоновый мониторинг для всех программ из GUI
+                    StartMonitoringForLaunchedPrograms();
+
+                    // Скрывает форму, но продолжает работать в фоне
+                    this.Hide();
+                    e.Cancel = true;
+
+                    // Когда все мониторы завершатся — закрывает приложение
+                    System.Threading.Tasks.Task.Run(() => WaitForMonitorsAndExit());
+                }
+                else
+                {
+                    e.Cancel = true;
+                }
+                return;
+            }
+
+            // Если есть активные задачи мониторинга
             if (activeCount > 0)
             {
                 var result = MessageBox.Show(
-                    $"Есть запущенных программ под мониторингом: {activeCount}\n\n" +
+                    $"Есть запущенные программы под мониторингом: {activeCount}\n\n" +
+                    "Служба мониторинга не запущена!\n\n" +
                     "Закрыть Program Locker?\n" +
                     "Защита будет восстановлена в фоновом режиме после закрытия программ.",
                     "Подтверждение", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
@@ -2074,9 +2616,110 @@ namespace Program_Locker
             }
         }
 
+        // RunFromShortcutNoWait запускает файл через ярлык без ожидания (отслеживается службой)
+        public void RunFromShortcutNoWait(string visiblePath, string password)
+        {
+            try
+            {
+                List<FileEntry> entries;
+                try
+                {
+                    entries = store.DecryptEntries(password);
+                }
+                catch (CryptographicException)
+                {
+                    MessageBox.Show("Неверный пароль.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                catch
+                {
+                    MessageBox.Show("Ошибка расшифровки конфига.", "Ошибка");
+                    return;
+                }
+
+                string fullPath = Path.GetFullPath(visiblePath);
+                var entry = entries.FirstOrDefault(e =>
+                    string.Equals(e.VisiblePath, fullPath, StringComparison.OrdinalIgnoreCase));
+
+                if (entry == null)
+                {
+                    MessageBox.Show(
+                        "Запись не найдена в Program Locker.\n\n" +
+                        "Возможно, файл был удалён из списка защиты.",
+                        "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                string status = GetFileStatus(entry);
+
+                // Режим без лаунчера
+                if (entry.NoLauncher)
+                {
+                    if (status == "Разблокирован (без лаунчера)")
+                    {
+                        if (File.Exists(entry.VisiblePath))
+                            Process.Start(entry.VisiblePath);
+                        else
+                            MessageBox.Show("Файл не найден: " + entry.VisiblePath, "Ошибка");
+                        return;
+                    }
+
+                    if (status == "Защищён (без лаунчера)")
+                    {
+                        if (!File.Exists(entry.HiddenPath))
+                        {
+                            MessageBox.Show("Защищённый файл не найден: " + entry.HiddenPath, "Ошибка");
+                            return;
+                        }
+
+                        // Разблокирует
+                        if (File.Exists(entry.VisiblePath))
+                            File.Delete(entry.VisiblePath);
+                        File.Move(entry.HiddenPath, entry.VisiblePath);
+                        ProtectionEngine.RemoveProtection(entry.VisiblePath, entry.Patches);
+
+                        // Регистрирует в службе
+                        RegisterWithMonitor(entry.VisiblePath, entry.HiddenPath, password, true);
+
+                        // Запускает
+                        Process.Start(entry.VisiblePath);
+                        return;
+                    }
+
+                    MessageBox.Show($"Невозможно запустить.\nСтатус: {status}", "Ошибка");
+                    return;
+                }
+
+                // Режим с лаунчером
+                if (status == "Разблокирован")
+                {
+                    if (File.Exists(entry.VisiblePath))
+                        Process.Start(entry.VisiblePath);
+                    else
+                        MessageBox.Show("Файл не найден: " + entry.VisiblePath, "Ошибка");
+                    return;
+                }
+
+                if (status == "Защищён")
+                {
+                    // Использует RunAsUnlockerNoWait вместо RunAsUnlocker
+                    RunAsUnlockerNoWait(entry.VisiblePath, password);
+                    return;
+                }
+
+                MessageBox.Show($"Невозможно запустить.\nСтатус: {status}", "Ошибка");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка: " + ex.Message, "Ошибка");
+            }
+        }
+
         // MonitorAndRelockFromShortcut мониторит процесс и восстанавливает защиту (для режима без лаунчера через ярлык)
         private void MonitorAndRelockFromShortcut(string visiblePath, string hiddenPath, string password)
         {
+            RegisterWithMonitor(visiblePath, hiddenPath, password, true);
+
             shortcutMonitorTask = System.Threading.Tasks.Task.Run(() =>
             {
                 try
@@ -2114,6 +2757,7 @@ namespace Program_Locker
 
                             store.EncryptAndStoreEntries(currentEntries, password);
                             SaveStore();
+                            UnregisterFromMonitor(visiblePath);
                             break;
                         }
                         catch (IOException)
@@ -2124,12 +2768,6 @@ namespace Program_Locker
                 }
                 catch { }
             });
-        }
-
-        // WaitForShortcutMonitoring ожидает завершения мониторинга при запуске через ярлык
-        public void WaitForShortcutMonitoring()
-        {
-            shortcutMonitorTask?.Wait();
         }
 
         // BtnShortcut_Click создаёт ярлыки на рабочем столе для выбранных программ
@@ -2289,7 +2927,7 @@ namespace Program_Locker
                 return diff == 0;
             }
         }
-
+        
         // Класс FileEntry представляет запись о заблокированном файле
         class FileEntry
         {
@@ -2772,7 +3410,7 @@ namespace Program_Locker
             private static readonly IntPtr RT_ICON = new(3);
             private static readonly IntPtr RT_GROUP_ICON = new(14);
 
-            // ReplaceIcon копирует все иконки из sourceExe в targetExe с сохранением качества
+            // ReplaceIcon копирует все иконки из sourceExe в targetExe с сохранениет качества
             public static bool ReplaceIcon(string sourceExe, string targetExe)
             {
                 IntPtr hSource = IntPtr.Zero;
@@ -2840,7 +3478,7 @@ namespace Program_Locker
                         byte[] data = ExtractResource(hSource, RT_GROUP_ICON, id);
                         if (data != null)
                         {
-                            // Используем стандартный ID 32512 для главной иконки
+                            // Использует стандартный ID 32512 для главной иконки
                             IntPtr targetId = (groupIconIds.IndexOf(id) == 0) ? new IntPtr(32512) : id;
                             UpdateResource(hUpdate, RT_GROUP_ICON, targetId, 0, data, (uint)data.Length);
                         }
