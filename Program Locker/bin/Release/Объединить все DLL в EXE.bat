@@ -1,8 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: Путь к ILMerge.exe
-set ILMERGE="%USERPROFILE%\.nuget\packages\ilmerge\3.0.41\tools\net452\ILMerge.exe"
+:: Путь к ILRepack.exe (Ссылка на проект: https://github.com/gluck/il-repack)
+set ILREPACK="%~dp0..\ILRepack\net472\ILRepack.exe"
 
 :: Имя исходного исполняемого файла
 set TARGET="Program Locker.exe"
@@ -27,8 +27,8 @@ for %%f in (*.dll) do (
     set DLLS=!DLLS! %%f
 )
 
-:: Запуск ILMerge с параметрами (/target:exe - для консольных программ, /target:winexe - для десктопных программ, скрывает консоль)
-%ILMERGE% /target:winexe /out:%OUTPUT% %TEMP_TARGET% %DLLS%
+:: Запуск ILRepack с параметрами (/target:exe - для консольных программ, /target:winexe - для десктопных программ, скрывает консоль)
+%ILREPACK% /target:exe /internalize /out:%OUTPUT% %TEMP_TARGET% %DLLS%
 
 :: Проверка успешности слияния
 if %errorlevel% neq 0 (
@@ -57,4 +57,5 @@ if exist "app.publish" (
 )
 
 :end
+
 :: pause

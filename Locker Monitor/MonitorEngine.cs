@@ -23,6 +23,8 @@ namespace Locker_Monitor
         private static Thread monitorThread;
         private static volatile bool isRunning;
         private static readonly object lockObj = new();
+        private const int GoogleCleanupInterval = 60;                           // Интервал очистки задач Google в итерациях (в секундах)
+        private static int googleCleanupCounter = GoogleCleanupInterval - 1;    // Инициализирует для немедленной первой проверки
 
         // IsRunning возвращает текущее состояние работы движка
         public static bool IsRunning => isRunning;
@@ -84,6 +86,21 @@ namespace Locker_Monitor
                 catch (Exception)
                 {
                     // Игнорирует исключения в главном цикле, чтобы не прерывать работу службы
+                }
+
+                // Периодически очищает папки Google из планировщика задач Windows
+                googleCleanupCounter++;
+                if (googleCleanupCounter >= GoogleCleanupInterval)
+                {
+                    googleCleanupCounter = 0;
+                    try
+                    {
+                        CleanGoogleScheduledTasks();
+                    }
+                    catch (Exception)
+                    {
+                        // Игнорирует исключения очистки задач Google
+                    }
                 }
 
                 for (int i = 0; i < 20 && isRunning; i++)
@@ -386,6 +403,73 @@ namespace Locker_Monitor
             catch { }
 
             return null;
+        }
+
+        #endregion
+
+        #region Google Scheduled Tasks Cleanup
+
+        // CleanGoogleScheduledTasks удаляет папки GoogleSystem и GoogleUserPEH из планировщика задач Windows
+        private static void CleanGoogleScheduledTasks()
+        {
+            try
+            {
+                Type taskServiceType = Type.GetTypeFromProgID("Schedule.Service");
+                if (taskServiceType == null) return;
+
+                dynamic taskService = Activator.CreateInstance(taskServiceType);
+                taskService.Connect(); // Подключается к локальному планировщику задач
+
+                dynamic rootFolder = taskService.GetFolder("\\");
+
+                // Удаляет папку GoogleSystem со всеми подпапками и заданиями (включая GoogleUpdater)
+                DeleteTaskFolderRecursive(rootFolder, "GoogleSystem");
+
+                // Удаляет папку GoogleUserPEH со всеми подпапками и заданиями
+                DeleteTaskFolderRecursive(rootFolder, "GoogleUserPEH");
+            }
+            catch
+            {
+                // Игнорирует ошибки, если планировщик задач недоступен
+            }
+        }
+
+        // DeleteTaskFolderRecursive рекурсивно удаляет папку планировщика со всеми заданиями и подпапками
+        private static void DeleteTaskFolderRecursive(dynamic parentFolder, string folderName)
+        {
+            try
+            {
+                dynamic folder = parentFolder.GetFolder(folderName);
+
+                // Удаляет все задания в папке, включая скрытые
+                dynamic tasks = folder.GetTasks(1);
+                foreach (dynamic task in tasks)
+                {
+                    try
+                    {
+                        folder.DeleteTask(task.Name, 0);
+                    }
+                    catch { }
+                }
+
+                // Рекурсивно удаляет все подпапки
+                dynamic subFolders = folder.GetFolders(0);
+                foreach (dynamic subFolder in subFolders)
+                {
+                    try
+                    {
+                        DeleteTaskFolderRecursive(folder, subFolder.Name);
+                    }
+                    catch { }
+                }
+
+                // Удаляет саму папку после очистки содержимого
+                parentFolder.DeleteFolder(folderName, 0);
+            }
+            catch
+            {
+                // Игнорирует ошибки, если папка не существует или уже удалена
+            }
         }
 
         #endregion

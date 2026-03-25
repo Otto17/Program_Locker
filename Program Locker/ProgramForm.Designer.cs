@@ -196,7 +196,7 @@
             this.Version.Name = "Version";
             this.Version.Size = new System.Drawing.Size(57, 12);
             this.Version.TabIndex = 0;
-            this.Version.Text = "ver 12.01.26";
+            this.Version.Text = "ver 25.03.26";
             // 
             // Author
             // 
