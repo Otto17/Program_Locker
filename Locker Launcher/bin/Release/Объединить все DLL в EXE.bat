@@ -28,7 +28,7 @@ for %%f in (*.dll) do (
 )
 
 :: Запуск ILRepack с параметрами (/target:exe - для консольных программ, /target:winexe - для десктопных программ, скрывает консоль)
-%ILREPACK% /target:exe /internalize /out:%OUTPUT% %TEMP_TARGET% %DLLS%
+%ILREPACK% /target:winexe /internalize /out:%OUTPUT% %TEMP_TARGET% %DLLS%
 
 :: Проверка успешности слияния
 if %errorlevel% neq 0 (
